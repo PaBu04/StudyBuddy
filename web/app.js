@@ -872,6 +872,7 @@ function runTest(tab) {
   if (cmd.startsWith("find:")) runTestFind(cmd.slice(5));
   else if (cmd.startsWith("ask:")) setTimeout(() => chat.ask(cmd.slice(4)), 2500);
   else if (cmd === "groups") setTimeout(() => runTestGroups(tab), 1000);
+  else if (cmd.startsWith("type:")) setTimeout(() => { const i = $("chatInput"); i.focus(); i.value = cmd.slice(5); i.dispatchEvent(new Event("input")); }, 1500);
   else if (cmd.startsWith("goto:")) {
     setTimeout(() => {
       tab.viewer.currentPageNumber = +cmd.slice(5);

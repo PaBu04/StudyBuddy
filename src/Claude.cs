@@ -246,6 +246,67 @@ rechts liest die Nutzerin bzw. der Nutzer Vorlesungsfolien oder Skripte.
             outThread.Start();
         }
 
+        // Skills aus ~/.claude/skills (inkl. von claude.ai synchronisierter) für die "/"-Autovervollständigung
+        // -> skills\n<name>\t<Beschreibung>\n…
+        void ListSkills()
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var sb = new StringBuilder("skills");
+                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".claude\skills");
+                try
+                {
+                    if (Directory.Exists(root))
+                        foreach (string f in FindSkillFiles(root, 0))
+                        {
+                            string name = null, desc = "";
+                            ParseSkill(f, ref name, ref desc);
+                            if (string.IsNullOrEmpty(name)) name = Path.GetFileName(Path.GetDirectoryName(f));
+                            if (!seen.Add(name)) continue;
+                            sb.Append('\n').Append(name.Replace("\t", " ")).Append('\t').Append(desc.Replace("\t", " ").Replace("\n", " "));
+                        }
+                }
+                catch { }
+                UiPost(sb.ToString());
+            });
+        }
+
+        static IEnumerable<string> FindSkillFiles(string dir, int depth)
+        {
+            var list = new List<string>();
+            try
+            {
+                string f = Path.Combine(dir, "SKILL.md");
+                if (File.Exists(f)) { list.Add(f); return list; }
+                if (depth >= 3) return list;
+                foreach (string d in Directory.GetDirectories(dir))
+                {
+                    string n = Path.GetFileName(d);
+                    if (n.StartsWith(".")) continue; // .staging, .bucket-… usw.
+                    list.AddRange(FindSkillFiles(d, depth + 1));
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        static void ParseSkill(string file, ref string name, ref string desc)
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(file, Encoding.UTF8); } catch { return; }
+            if (lines.Length == 0 || lines[0].Trim() != "---") return;
+            for (int i = 1; i < lines.Length && lines[i].Trim() != "---"; i++)
+            {
+                string l = lines[i];
+                int c = l.IndexOf(':');
+                if (c <= 0) continue;
+                string k = l.Substring(0, c).Trim(), v = l.Substring(c + 1).Trim().Trim('"', '\'');
+                if (k == "name") name = v;
+                else if (k == "description") desc = v;
+            }
+        }
+
         void ClaudeStop(string req)
         {
             Process p;

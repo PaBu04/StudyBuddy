@@ -308,6 +308,7 @@ namespace StudyBuddy
                 case "recsave": RecSave(arg); break;
                 case "ask": ClaudeAsk(arg); break;
                 case "stop": ClaudeStop(arg); break;
+                case "skills": ListSkills(); break;
                 case "log": // nur mit STUDYBUDDY_DEBUG
                     if (Environment.GetEnvironmentVariable("STUDYBUDDY_DEBUG") != null)
                         try

@@ -399,13 +399,62 @@ export function createChat(api) {
 
   /* ================= Eingabe ================= */
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
-  input.addEventListener("input", autosize);
+  input.addEventListener("input", () => { autosize(); updateSlash(); });
+  input.addEventListener("blur", () => setTimeout(hideSlash, 150));
   input.addEventListener("keydown", (e) => {
+    if (!slashEl.hidden) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        slashSel = (slashSel + (e.key === "ArrowDown" ? 1 : -1) + slashItems.length) % slashItems.length;
+        renderSlash();
+        e.stopPropagation();
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); pickSlash(slashSel); return; }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSlash(); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
     else if (e.key === "Escape") { e.preventDefault(); api.focusDoc(); }
     e.stopPropagation();
   });
   sendBtn.onclick = submit;
+
+  /* ---------- "/" → Skills autovervollständigen ---------- */
+  const slashEl = $("chatSlash");
+  let skills = [];       // { name, desc } vom Host (~/.claude/skills)
+  let slashItems = [];
+  let slashSel = 0;
+  function updateSlash() {
+    const m = input.value.match(/^\/([\w:.-]*)$/); // nur solange der Name getippt wird
+    if (!m || !skills.length) { hideSlash(); return; }
+    const q = m[1].toLowerCase();
+    const items = skills.filter((s) => s.name.toLowerCase().includes(q) || (q.length > 2 && s.desc.toLowerCase().includes(q)));
+    items.sort((a, b) => (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name));
+    slashItems = items.slice(0, 8);
+    if (!slashItems.length) { hideSlash(); return; }
+    slashSel = Math.min(slashSel, slashItems.length - 1);
+    renderSlash();
+  }
+  function renderSlash() {
+    slashEl.replaceChildren(...slashItems.map((s, i) => {
+      const el = document.createElement("div");
+      el.className = "si" + (i === slashSel ? " sel" : "");
+      el.innerHTML = `<b>/${esc(s.name)}</b><span>${esc(s.desc)}</span>`;
+      el.title = s.desc;
+      el.addEventListener("mousedown", (e) => { e.preventDefault(); pickSlash(i); });
+      return el;
+    }));
+    slashEl.hidden = false;
+  }
+  function hideSlash() { slashEl.hidden = true; slashSel = 0; }
+  function pickSlash(i) {
+    const s = slashItems[i];
+    if (!s) return;
+    input.value = "/" + s.name + " ";
+    hideSlash();
+    autosize();
+    input.focus();
+  }
   function submit() {
     if (current && current.run) { stop(current.run); return; }
     ask(input.value);
@@ -572,8 +621,13 @@ export function createChat(api) {
     const p = raw.split("\n");
     switch (cmd) {
       case "settings":
+        if (!settings.known) send("skills");
         Object.assign(settings, { syncDir: p[1] || "", claude: p[2] || "", model: p[3] || "", device: p[4] || "local", known: true });
         setStatus();
+        return true;
+      case "skills":
+        skills = p.slice(1).filter(Boolean).map((l) => { const [name, desc = ""] = l.split("\t"); return { name, desc }; });
+        if (window.__log) window.__log("skills: " + skills.map((s) => s.name).join(", "));
         return true;
       case "rec": onRec(p[1], p[2], p[3], p.slice(4).join("\n")); return true;
       case "cc": onEvent(p[1], p.slice(2).join("\n")); return true;

@@ -11,7 +11,7 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 - Claude bekommt automatisch Dateiname, Pfad, aktuelle Seite und den Text dieser Seite mit
 - Markierter Text im PDF wird mitgeschickt. Rechtsklick auf eine Markierung bietet *Erklären*, *Beispiel*, *Übersetzen* und *Quizfrage* an
 - Claude kann die PDF selbst lesen (auch Diagramme und Formeln) und im Web recherchieren. Dateien ändern oder Befehle ausführen kann Claude nicht
-- Dein Skill **vorlesung-erklaeren** ist eingebunden: Button „Vorlesung erklären“, danach „Weiter“ für die nächste Foliengruppe. Andere eigene Claude-Skills startest du mit `/skill-name`
+- Dein Skill **vorlesung-erklaeren** ist eingebunden: Button „Vorlesung erklären“, danach „Weiter“ für die nächste Foliengruppe. Andere eigene Claude-Skills startest du mit `/` (mit Autovervollständigung)
 - Formeln (LaTeX via KaTeX) und Markdown in den Antworten. Seitenverweise wie „S. 12“ sind anklickbar
 - Ein Chat pro PDF: Öffnest du eine PDF, zu der es schon einen Chat gibt, wird er automatisch geöffnet und fortgesetzt
 
@@ -63,6 +63,7 @@ Das Skript lädt beim ersten Lauf das WebView2 SDK (NuGet), PDF.js und KaTeX (np
 | `STUDYBUDDY_PROFILE=name` | Getrenntes Profil/Instanz (eigene Einstellungen und Daten), z. B. zum Testen |
 | `STUDYBUDDY_TEST=ask:<Frage>` | nur mit Debug: stellt nach dem Öffnen automatisch eine Frage an Claude |
 | `STUDYBUDDY_TEST=groups` | nur mit Debug: Selbsttest für verschachtelte Ordner |
+| `STUDYBUDDY_TEST=type:<Text>` | nur mit Debug: tippt Text ins Chatfeld (z. B. `/vor` für die Skill-Liste) |
 
 ## Lizenz
 
