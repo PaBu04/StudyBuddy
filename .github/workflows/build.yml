@@ -1,0 +1,43 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: powershell
+        run: .\build.ps1
+
+      - name: Package
+        id: pkg
+        shell: powershell
+        run: |
+          $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          $zip = "StudyBuddy-$ver-win-x64.zip"
+          Copy-Item LICENSE, THIRD-PARTY-NOTICES.md dist\
+          Compress-Archive -Path dist\* -DestinationPath $zip
+          "zip=$zip" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StudyBuddy-win-x64
+          path: dist/
+
+      - name: Create GitHub release
+        if: github.ref_type == 'tag'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" "${{ steps.pkg.outputs.zip }}" --title "StudyBuddy $env:GITHUB_REF_NAME" --generate-notes

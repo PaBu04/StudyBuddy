@@ -1,0 +1,16 @@
+# Heruntergeladene Abhängigkeiten (werden von build.ps1 geladen)
+_deps/
+
+# Build-Ausgabe (wird als Release-ZIP auf GitHub veröffentlicht)
+dist/
+dist-release/
+*.zip
+
+# Logs / lokale Dateien
+*.log
+*.pdf
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
