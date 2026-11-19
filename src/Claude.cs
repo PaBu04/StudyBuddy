@@ -90,16 +90,21 @@ rechts liest die Nutzerin bzw. der Nutzer Vorlesungsfolien oder Skripte.
   absoluten Pfad, die gerade angezeigte Seite und den automatisch extrahierten Text dieser Seite.
   Ggf. auch markierten Text. Dieser Block wird automatisch erzeugt – erwähne ihn nicht ausdrücklich.
 - Bezieht sich eine Frage auf „diese Folie“, „hier“ o. ä., ist die aktuelle Seite gemeint.
-- Reicht der extrahierte Text nicht (Diagramme, Formeln, Bilder, andere Seiten), lies die PDF selbst mit dem
-  Read-Tool (Parameter `pages`, z. B. ""12"" oder ""10-14""; max. 20 Seiten pro Aufruf).
+- Reicht der extrahierte Text nicht (Diagramme, Formeln, Bilder, andere Seiten), lies die PDF selbst mit dem Read-Tool.
+- WICHTIG: Den Parameter `pages` des Read-Tools NICHT verwenden (dafür fehlt pdftoppm, es schlägt fehl).
+  Kleine PDFs (bis 10 Seiten) direkt ohne `pages` lesen. Bei größeren nennt der Kontext-Block **Lesekopien**:
+  `volltext.txt` (Text aller Seiten mit Markern „===== Seite N =====“, für Überblick und Suche; bei Bedarf mit
+  offset/limit in Teilen lesen) und PDF-Teile à 10 Seiten (`S001-010.pdf` …) für Diagramme, Formeln und Layout,
+  jeweils ohne `pages` lesen. Seitennummern beziehen sich immer auf die Original-PDF.
 - Du darfst im Web recherchieren (WebSearch/WebFetch), wenn es dem Verständnis hilft. Nenne dann die Quelle.
 - Du kannst keine Dateien verändern und keine Befehle ausführen.
 
 ## Skills
 - Die Skills der Nutzerin bzw. des Nutzers stehen dir über das Skill-Tool zur Verfügung. Wird ein Skill genannt
   (z. B. „vorlesung-erklaeren“ bzw. „Nutze den Skill …“), rufe ihn auf und folge seinen Anweisungen.
-- Für `vorlesung-erklaeren`: „Hochgeladene Folien“ ist der Foliensatz aus dem Kontext-Block. Lies ihn mit Read
-  (in Blöcken von max. 20 Seiten). Die Anweisungen des Skills haben Vorrang vor dem Stil unten.
+- Für `vorlesung-erklaeren`: „Hochgeladene Folien“ ist der Foliensatz aus dem Kontext-Block. Für den Überblick
+  zuerst `volltext.txt` lesen; für die Erklärung einer Foliengruppe zusätzlich den passenden PDF-Teil, damit du
+  Diagramme und Formeln siehst. Die Anweisungen des Skills haben Vorrang vor dem Stil unten.
 - Läuft ein Skill (z. B. schrittweises Erklären), bleib dabei: „weiter“ heißt nächster Schritt, auch wenn die
   aktuelle Seite im Kontext-Block eine andere ist. Zwischenfragen beantworten und danach an derselben Stelle fortsetzen.
 
@@ -244,6 +249,81 @@ rechts liest die Nutzerin bzw. der Nutzer Vorlesungsfolien oder Skripte.
             });
             outThread.IsBackground = true;
             outThread.Start();
+        }
+
+        // ---------- Lesekopien großer PDFs ----------
+        // Claude Codes Read-Tool liest PDFs mit bis zu 10 Seiten direkt (inkl. Bildern). Größere PDFs gehen nur
+        // seitenweise und dafür bräuchte es pdftoppm (Poppler). Deshalb legt die Seite Volltext + 10-Seiten-Teile an.
+        const string PrepVersion = "v1";
+        static readonly System.Text.RegularExpressions.Regex PrepName =
+            new System.Text.RegularExpressions.Regex(@"^(volltext\.txt|S\d{3,4}-\d{3,4}\.pdf)$");
+
+        string PrepDir(string fp) { return Path.Combine(Workspace, "docs", fp); }
+
+        // prepcheck:<fp>\n<Seiten>  ->  prep\n<fp>\n<Ordner>\n<fertig 0|1>\n<Anzahl PDF-Teile>
+        void PrepCheck(string arg)
+        {
+            string[] p = arg.Split('\n');
+            string fp = p[0].Trim(), pages = p.Length > 1 ? p[1].Trim() : "";
+            if (!FpRx.IsMatch(fp)) return;
+            string dir = PrepDir(fp);
+            bool ready = false;
+            int parts = 0;
+            try
+            {
+                string marker = Path.Combine(dir, "ready.txt");
+                ready = File.Exists(marker) && File.ReadAllText(marker).Trim() == PrepVersion + " " + pages;
+                if (Directory.Exists(dir)) parts = Directory.GetFiles(dir, "S*.pdf").Length;
+                if (!ready && Directory.Exists(dir)) foreach (string f in Directory.GetFiles(dir)) File.Delete(f);
+                if (ready) Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow);
+                CleanupPrep(Path.Combine(Workspace, "docs"), dir);
+            }
+            catch { }
+            Post("prep\n" + fp + "\n" + dir + "\n" + (ready ? "1" : "0") + "\n" + parts);
+        }
+
+        // prepfile:<fp>\n<Dateiname>\n<Base64>
+        void PrepFile(string arg)
+        {
+            string[] p = arg.Split(new[] { '\n' }, 3);
+            if (p.Length < 3 || !FpRx.IsMatch(p[0].Trim()) || !PrepName.IsMatch(p[1].Trim())) return;
+            try
+            {
+                string dir = PrepDir(p[0].Trim());
+                Directory.CreateDirectory(dir);
+                File.WriteAllBytes(Path.Combine(dir, p[1].Trim()), Convert.FromBase64String(p[2]));
+            }
+            catch (Exception ex) { Post("log:prepfile " + ex.Message); }
+        }
+
+        // prepdone:<fp>\n<Seiten>  ->  prepok\n<fp>\n<Anzahl PDF-Teile>
+        void PrepDone(string arg)
+        {
+            string[] p = arg.Split('\n');
+            string fp = p[0].Trim();
+            if (!FpRx.IsMatch(fp)) return;
+            int parts = 0;
+            try
+            {
+                string dir = PrepDir(fp);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "ready.txt"), PrepVersion + " " + (p.Length > 1 ? p[1].Trim() : ""));
+                parts = Directory.GetFiles(dir, "S*.pdf").Length;
+            }
+            catch { }
+            Post("prepok\n" + fp + "\n" + parts);
+        }
+
+        // nur die 40 zuletzt benutzten Foliensätze behalten
+        static void CleanupPrep(string root, string keep)
+        {
+            if (!Directory.Exists(root)) return;
+            var dirs = new List<DirectoryInfo>(new DirectoryInfo(root).GetDirectories());
+            if (dirs.Count <= 40) return;
+            dirs.Sort((a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
+            for (int i = 40; i < dirs.Count; i++)
+                if (!string.Equals(dirs[i].FullName, keep, StringComparison.OrdinalIgnoreCase))
+                    try { dirs[i].Delete(true); } catch { }
         }
 
         // Skills aus ~/.claude/skills (inkl. von claude.ai synchronisierter) für die "/"-Autovervollständigung

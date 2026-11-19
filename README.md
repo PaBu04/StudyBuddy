@@ -34,6 +34,7 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 
 StudyBuddy startet für jede Nachricht `claude -p` (Claude Code im Print-Modus) mit Streaming-Ausgabe:
 
+- Große PDFs (mehr als 10 Seiten) kann Claude Code ohne Poppler (`pdftoppm`) nicht seitenweise lesen. Deshalb legt StudyBuddy vor der ersten Frage **Lesekopien** in `%LOCALAPPDATA%\StudyBuddy\claude\docs\<Fingerprint>\` an: `volltext.txt` (Text aller Seiten mit Seitenmarkern) und PDF-Teile à 10 Seiten, die Claude komplett mit Bildern lesen kann. Die 40 zuletzt genutzten Foliensätze bleiben zwischengespeichert
 - Erlaubte Tools: nur `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch` und `Skill` (deine Claude-Skills). Alles andere wird automatisch abgelehnt
 - Arbeitsverzeichnis: `%LOCALAPPDATA%\StudyBuddy\claude`. Die `CLAUDE.md` dort enthält die Tutor-Anweisungen. Der Ordner der PDF wird per `--add-dir` freigegeben
 - Pro PDF und Gerät gibt es eine Claude-Code-Session, die mit `--resume` fortgesetzt wird. Wurde der Chat auf einem anderen Gerät begonnen, startet eine neue Session und bekommt den bisherigen Verlauf als Kontext

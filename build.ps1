@@ -6,6 +6,7 @@ $dist = Join-Path $root 'dist'
 $WebView2Version = '1.0.4258.31'
 $PdfJsVersion = '4.10.38'
 $KatexVersion = '0.16.11'
+$PdfLibVersion = '1.17.1'
 
 # --- Abhängigkeiten laden ---
 New-Item -ItemType Directory -Force $deps | Out-Null
@@ -25,6 +26,12 @@ if (-not (Test-Path "$deps\katex\package\dist\katex.mjs")) {
     Invoke-WebRequest "https://registry.npmjs.org/katex/-/katex-$KatexVersion.tgz" -OutFile "$deps\katex.tgz"
     New-Item -ItemType Directory -Force "$deps\katex" | Out-Null
     tar -xzf "$deps\katex.tgz" -C "$deps\katex"
+}
+if (-not (Test-Path "$deps\pdflib\package\dist\pdf-lib.esm.min.js")) {
+    Write-Host "Lade pdf-lib $PdfLibVersion ..."
+    Invoke-WebRequest "https://registry.npmjs.org/pdf-lib/-/pdf-lib-$PdfLibVersion.tgz" -OutFile "$deps\pdflib.tgz"
+    New-Item -ItemType Directory -Force "$deps\pdflib" | Out-Null
+    tar -xzf "$deps\pdflib.tgz" -C "$deps\pdflib"
 }
 if (-not (Test-Path "$root\assets\app.ico")) { & "$root\tools\make-icon.ps1" }
 
@@ -57,6 +64,9 @@ $kx = "$deps\katex\package"
 New-Item -ItemType Directory -Force "$dist\web\katex" | Out-Null
 Copy-Item "$kx\dist\katex.mjs", "$kx\dist\katex.min.css", "$kx\LICENSE" "$dist\web\katex"
 Copy-Item "$kx\dist\fonts" "$dist\web\katex\fonts" -Recurse
+New-Item -ItemType Directory -Force "$dist\web\pdflib" | Out-Null
+Copy-Item "$deps\pdflib\package\dist\pdf-lib.esm.min.js" "$dist\web\pdflib"
+Copy-Item "$deps\pdflib\package\LICENSE.md" "$dist\web\pdflib\LICENSE.md"
 Copy-Item "$root\installer\Install.cmd" $dist
 # Windows PowerShell 5.1 braucht UTF-8 mit BOM für Umlaute
 foreach ($f in 'install.ps1', 'uninstall.ps1') {

@@ -467,7 +467,7 @@ export function createChat(api) {
     const tab = api.active();
     if (!tab || !tab.doc) { api.showMessage("Bitte zuerst eine PDF öffnen."); return; }
     const rec = await ensureRec(tab);
-    if (!rec || rec.run) return;
+    if (!rec || rec.run || rec.preparing) return;
     if (!settings.device) settings.device = "local";
     sel = sel || (selection && selection.fp === rec.fp ? selection : null);
     const page = tab.page;
@@ -487,15 +487,89 @@ export function createChat(api) {
     // "/skill-name …" als Kurzbefehl für Skills
     const slash = text.match(/^\/([\w:.-]+)\s*([\s\S]*)$/);
     const promptText = slash ? `Nutze den Skill „${slash[1]}“.` + (slash[2] ? " " + slash[2] : "") : text;
-    const job = { user, reply, history, promptText, dir: dirOf(tab.path), ctx: contextBlock(tab, page, pageText, sel) };
+    render();
+    let copies = null;
+    rec.preparing = true;
+    try { copies = await prepare(tab, rec, reply); }
+    catch (e) { if (window.__log) window.__log("Lesekopien fehlgeschlagen: " + ((e && e.message) || e)); }
+    rec.preparing = false;
+    const job = { user, reply, history, promptText, dir: dirOf(tab.path), ctx: contextBlock(tab, page, pageText, sel, copies) };
     startRun(rec, job, false, false);
     render();
     saveRec(rec);
   }
 
-  function contextBlock(tab, page, pageText, sel) {
+  /* ---------- Lesekopien für große PDFs (Read-Tool ohne Poppler) ---------- */
+  const CHUNK = 10;
+  const waiting = new Map(); // "prep:<fp>" / "prepok:<fp>" -> resolve
+  const hostCall = (cmd, arg, reply, fp) =>
+    new Promise((res, rej) => {
+      waiting.set(reply + ":" + fp, res);
+      send(cmd + ":" + arg);
+      setTimeout(() => { if (waiting.delete(reply + ":" + fp)) rej(new Error("Zeitüberschreitung " + cmd)); }, 60000);
+    });
+  function b64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  const pad = (n) => String(n).padStart(3, "0");
+
+  function prepare(tab, rec, reply) {
+    if (tab.pages <= CHUNK) return Promise.resolve(null); // kleine PDF liest Claude direkt
+    if (!rec.prep) {
+      rec.prep = doPrepare(tab, rec, reply);
+      rec.prep.catch(() => { rec.prep = null; });
+    }
+    return rec.prep;
+  }
+
+  async function doPrepare(tab, rec, reply) {
+    const pages = tab.pages;
+    const fp = rec.fp;
+    const chunks = [];
+    for (let s = 1; s <= pages; s += CHUNK) chunks.push(`S${pad(s)}-${pad(Math.min(s + CHUNK - 1, pages))}.pdf`);
+    let [, , dir, ready, parts] = await hostCall("prepcheck", fp + "\n" + pages, "prep", fp);
+    if (ready !== "1") {
+      const label = `Bereite Foliensatz für Claude vor (${pages} Seiten) …`;
+      reply.tools.push(label);
+      touch(rec, reply);
+      let txt = `Volltext von „${tab.name}“ (${pages} Seiten, automatisch extrahiert)\n`;
+      for (let n = 1; n <= pages; n++) txt += `\n===== Seite ${n} =====\n` + (await api.pageText(tab, n, 20000));
+      send("prepfile:" + fp + "\nvolltext.txt\n" + b64(new TextEncoder().encode(txt)));
+      try {
+        const { PDFDocument } = await import("./pdflib/pdf-lib.esm.min.js");
+        const src = await PDFDocument.load(await tab.doc.getData(), { ignoreEncryption: true, updateMetadata: false });
+        for (let c = 0; c < chunks.length; c++) {
+          const out = await PDFDocument.create();
+          const idx = [];
+          for (let i = c * CHUNK; i < Math.min((c + 1) * CHUNK, pages); i++) idx.push(i);
+          for (const pg of await out.copyPages(src, idx)) out.addPage(pg);
+          send("prepfile:" + fp + "\n" + chunks[c] + "\n" + b64(await out.save()));
+        }
+      } catch (e) {
+        if (window.__log) window.__log("PDF-Teile nicht möglich: " + ((e && e.message) || e)); // z. B. verschlüsselt -> nur Volltext
+      }
+      [, , parts] = await hostCall("prepdone", fp + "\n" + pages, "prepok", fp);
+      reply.tools.splice(reply.tools.indexOf(label), 1);
+      touch(rec, reply);
+    }
+    return { dir, chunks: +parts === chunks.length ? chunks : [] };
+  }
+
+  function contextBlock(tab, page, pageText, sel, copies) {
     let s = "[StudyBuddy-Kontext]\n" +
       `Foliensatz: ${tab.name}\nPfad: ${tab.path}\nAktuelle Seite: ${page} von ${tab.pages}\n`;
+    if (copies) {
+      const sep = copies.dir.includes("/") ? "/" : "\\";
+      s += "Lesekopien (mit Read OHNE pages-Parameter lesen; die Original-PDF nicht seitenweise lesen):\n" +
+        `- Volltext aller Seiten: ${copies.dir}${sep}volltext.txt\n`;
+      if (copies.chunks.length) {
+        const cur = copies.chunks[Math.floor((page - 1) / CHUNK)];
+        s += `- PDF-Teile à ${CHUNK} Seiten in ${copies.dir}: ${copies.chunks[0]} … ${copies.chunks[copies.chunks.length - 1]}` +
+          ` (Schema S<von>-<bis>.pdf; aktuelle Seite steckt in ${cur})\n`;
+      }
+    }
     if (sel) s += `Markierter Text (S. ${sel.page}):\n"""\n${sel.text}\n"""\n`;
     s += pageText
       ? `Text der aktuellen Seite (automatisch extrahiert, Layout/Formeln evtl. unvollständig):\n"""\n${pageText}\n"""\n`
@@ -625,6 +699,12 @@ export function createChat(api) {
         Object.assign(settings, { syncDir: p[1] || "", claude: p[2] || "", model: p[3] || "", device: p[4] || "local", known: true });
         setStatus();
         return true;
+      case "prep":
+      case "prepok": {
+        const w = waiting.get(cmd + ":" + p[1]);
+        if (w) { waiting.delete(cmd + ":" + p[1]); w(p); }
+        return true;
+      }
       case "skills":
         skills = p.slice(1).filter(Boolean).map((l) => { const [name, desc = ""] = l.split("\t"); return { name, desc }; });
         if (window.__log) window.__log("skills: " + skills.map((s) => s.name).join(", "));

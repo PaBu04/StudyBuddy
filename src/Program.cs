@@ -309,6 +309,9 @@ namespace StudyBuddy
                 case "ask": ClaudeAsk(arg); break;
                 case "stop": ClaudeStop(arg); break;
                 case "skills": ListSkills(); break;
+                case "prepcheck": PrepCheck(arg); break;
+                case "prepfile": PrepFile(arg); break;
+                case "prepdone": PrepDone(arg); break;
                 case "log": // nur mit STUDYBUDDY_DEBUG
                     if (Environment.GetEnvironmentVariable("STUDYBUDDY_DEBUG") != null)
                         try

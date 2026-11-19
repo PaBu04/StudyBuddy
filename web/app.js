@@ -710,7 +710,7 @@ window.addEventListener("resize", refit);
 
 /* ================= Claude-Chat ================= */
 // Seitentext für den Kontext (pdf.js-Textebene)
-async function pageText(tab, n) {
+async function pageText(tab, n, max = 6000) {
   if (!tab.doc) return "";
   try {
     const page = await tab.doc.getPage(n);
@@ -723,7 +723,7 @@ async function pageText(tab, n) {
       else if (it.str && !/\s$/.test(it.str)) s += " ";
     }
     s = s.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-    return s.length > 6000 ? s.slice(0, 6000) + " […]" : s;
+    return s.length > max ? s.slice(0, max) + " […]" : s;
   } catch { return ""; }
 }
 
