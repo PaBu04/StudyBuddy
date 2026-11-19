@@ -216,6 +216,9 @@ body.resizing #tabbar { transition: none; }
   border-left: 2px solid color-mix(in srgb, var(--gc) 60%, transparent);
 }
 .group.collapsed .gtabs { display: none; }
+.group.sub { margin: 4px 0 2px; }
+.group.dragging { opacity: .4; }
+.ghead[draggable="true"] { cursor: default; }
 .gtabs:empty::after {
   content: "Tabs hierher ziehen";
   display: block;
@@ -691,3 +694,5 @@ body.chat-open #chatBtn { display: none; }
 .chatmeta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #chatStatus.warn { color: #e0a452; }
 #chatStatus.bad { color: #ff8a80; }
+#chatQuick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+#chatQuick[hidden] { display: none; }

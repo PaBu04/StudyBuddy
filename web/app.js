@@ -34,7 +34,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 
 /* ================= Zustand ================= */
 const tabs = [];    // Reihenfolge = Anzeigereihenfolge
-const groups = [];  // { id, name, collapsed, color }
+const groups = [];  // { id, name, collapsed, color, parent } – parent: übergeordneter Ordner (Unterordner)
 let active = null;
 let tabSeq = 0;
 let primary = false;
@@ -76,7 +76,7 @@ function scheduleSave() {
 }
 function saveSession() {
   const data = {
-    groups: groups.map(({ id, name, collapsed, color }) => ({ id, name, collapsed, color })),
+    groups: groups.map(({ id, name, collapsed, color, parent }) => ({ id, name, collapsed, color, parent: parent || null })),
     tabs: tabs.map((t) => ({
       name: t.name,
       path: t.path,
@@ -91,7 +91,8 @@ function saveSession() {
 function restoreSession() {
   const s = loadJSON("session", null);
   if (s) {
-    for (const g of s.groups || []) groups.push({ id: g.id, name: g.name, collapsed: !!g.collapsed, color: g.color || COLORS[0] });
+    for (const g of s.groups || []) groups.push({ id: g.id, name: g.name, collapsed: !!g.collapsed, color: g.color || COLORS[0], parent: g.parent || null });
+    fixParents();
     for (const e of s.tabs || []) {
       if (!e.path) continue;
       const pos = savedPos(e.path);
@@ -264,7 +265,7 @@ function onHostLoad(url, name, path, tag) {
   const g = groupById(tag);
   const pos = savedPos(path);
   tab = addTab({ name, path, group: g ? g.id : null, want: pos ? { loc: pos.loc, scale: pos.scale } : null });
-  if (g) g.collapsed = false;
+  if (g) expandTo(g.id);
   loadInto(tab, url);
   activate(tab);
 }
@@ -327,7 +328,8 @@ function updateOfflineView() {
 $("offlineRetry").onclick = () => { if (active && active.offline) { active.retrying = true; send("reg:" + active.path); } };
 
 function visualOrder() {
-  return [...tabs.filter((t) => !t.group), ...groups.flatMap((g) => tabs.filter((t) => t.group === g.id))];
+  const walk = (g) => [...tabs.filter((t) => t.group === g.id), ...childGroups(g.id).flatMap(walk)];
+  return [...tabs.filter((t) => !t.group), ...childGroups(null).flatMap(walk)];
 }
 
 function cycleTab(dir) {
@@ -336,7 +338,7 @@ function cycleTab(dir) {
   const i = order.indexOf(active);
   const next = order[(i + dir + order.length) % order.length];
   const g = groupById(next.group);
-  if (g) g.collapsed = false;
+  if (g) expandTo(g.id);
   activate(next);
 }
 
@@ -350,24 +352,64 @@ function toggleRead(tab, value) {
 }
 
 /* ================= Gruppen ================= */
-function newGroup(withTab) {
+// Gruppen sind verschachtelbar ("Ordner" mit Unterordnern): parent = id des übergeordneten Ordners
+const childGroups = (parentId) => groups.filter((g) => (g.parent || null) === parentId);
+// liegt Gruppe a in b (oder ist b)?
+function isInside(a, b) {
+  for (let g = a, n = 0; g && n < 100; g = groupById(g.parent), n++) if (g === b) return true;
+  return false;
+}
+const descendantGroups = (g) => childGroups(g.id).flatMap((c) => [c, ...descendantGroups(c)]);
+const tabsIn = (g) => tabs.filter((t) => t.group === g.id || descendantGroups(g).some((d) => d.id === t.group));
+const groupPath = (g) => (g.parent && groupById(g.parent) ? groupPath(groupById(g.parent)) + " › " : "") + g.name;
+function expandTo(id) {
+  for (let g = groupById(id), n = 0; g && n < 100; g = groupById(g.parent), n++) g.collapsed = false;
+}
+// verwaiste oder zyklische Eltern (z. B. aus alter Sitzung) bereinigen
+function fixParents() {
+  for (const g of groups) {
+    if (g.parent && !groupById(g.parent)) g.parent = null;
+    if (g.parent && isInside(groupById(g.parent), g)) g.parent = null;
+  }
+}
+
+function newGroup(withTab, parent = null) {
   const g = {
     id: "g" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    name: "Neue Gruppe",
+    name: parent ? "Neuer Unterordner" : "Neue Gruppe",
     collapsed: false,
-    color: COLORS[groups.length % COLORS.length],
+    color: parent ? parent.color : COLORS[groups.length % COLORS.length],
+    parent: parent ? parent.id : null,
   };
   groups.push(g);
+  if (parent) expandTo(parent.id);
   if (withTab) moveTab(withTab, g.id, null);
   renderTabs();
   startRename(g);
   scheduleSave();
 }
 
+// Ordner in anderen Ordner (oder mit null auf oberste Ebene) verschieben
+function nestGroup(g, parentId) {
+  const p = groupById(parentId);
+  if (p && isInside(p, g)) return; // nicht in sich selbst / eigenen Unterordner
+  g.parent = p ? p.id : null;
+  groups.splice(groups.indexOf(g), 1);
+  groups.push(g);
+  if (p) expandTo(p.id);
+  renderTabs();
+  scheduleSave();
+}
+
+// closeTabs=false: Tabs und Unterordner wandern in den übergeordneten Ordner
 function deleteGroup(g, closeTabs) {
-  for (const t of tabs.filter((t) => t.group === g.id)) {
-    if (closeTabs) closeTab(t);
-    else t.group = null;
+  if (closeTabs) {
+    const doomed = tabsIn(g);
+    for (const d of descendantGroups(g)) groups.splice(groups.indexOf(d), 1);
+    for (const t of doomed) closeTab(t);
+  } else {
+    for (const t of tabs.filter((t) => t.group === g.id)) t.group = g.parent || null;
+    for (const c of childGroups(g.id)) c.parent = g.parent || null;
   }
   groups.splice(groups.indexOf(g), 1);
   renderTabs();
@@ -421,7 +463,7 @@ const ICONS = {
 
 function renderTabs() {
   const items = tabs.filter((t) => !t.group).map(tabEl);
-  for (const g of groups) items.push(groupEl(g));
+  for (const g of childGroups(null)) items.push(groupEl(g));
   tabList.replaceChildren(...items);
   body.classList.toggle("has-doc", tabs.length > 0);
   body.classList.toggle("has-tabbar", tabs.length > 0 || groups.length > 0);
@@ -476,19 +518,33 @@ function tabEl(t) {
 
 function groupEl(g) {
   const members = tabs.filter((t) => t.group === g.id);
-  const read = members.filter(isRead).length;
+  const all = tabsIn(g); // inkl. Unterordner
+  const read = all.filter(isRead).length;
   const wrap = document.createElement("div");
-  wrap.className = "group" + (g.collapsed ? " collapsed" : "") + (members.includes(active) ? " has-active" : "");
+  wrap.className = "group" + (g.collapsed ? " collapsed" : "") + (all.includes(active) ? " has-active" : "") + (g.parent ? " sub" : "");
+  wrap.dataset.gid = g.id;
   wrap.style.setProperty("--gc", g.color);
 
   const head = document.createElement("div");
   head.className = "ghead";
-  head.title = g.collapsed ? "Aufklappen" : "Zuklappen";
+  head.title = (g.collapsed ? "Aufklappen" : "Zuklappen") + " · Ziehen, um in einen anderen Ordner zu verschieben";
+  head.draggable = renaming !== g;
+  head.addEventListener("dragstart", (e) => {
+    if (renaming === g) { e.preventDefault(); return; }
+    e.stopPropagation();
+    dragGroup = g;
+    e.dataTransfer.setData("application/x-studybuddy-group", g.id);
+    e.dataTransfer.effectAllowed = "move";
+    requestAnimationFrame(() => wrap.classList.add("dragging"));
+  });
+  head.addEventListener("dragend", endDrag);
+  // Ordner darf hier abgelegt werden? (nicht in sich selbst oder eigene Unterordner)
+  const acceptsGroup = () => dragGroup && !isInside(g, dragGroup);
   const nameHtml = renaming === g
     ? `<input class="rename" value="${esc(g.name)}" spellcheck="false">`
     : `<span class="gname">${esc(g.name)}</span>`;
   head.innerHTML = ICONS.chev + '<span class="dot"></span>' + nameHtml +
-    `<span class="gcount${members.length && read === members.length ? " done" : ""}" title="gelesen / gesamt">${read}/${members.length}</span>` +
+    `<span class="gcount${all.length && read === all.length ? " done" : ""}" title="gelesen / gesamt (inkl. Unterordner)">${read}/${all.length}</span>` +
     `<button class="btn gadd" title="PDF in diese Gruppe öffnen">${ICONS.plus}</button>` +
     `<button class="btn gmore" title="Mehr">${ICONS.more}</button>`;
   head.addEventListener("click", (e) => {
@@ -501,46 +557,35 @@ function groupEl(g) {
   });
   head.addEventListener("dblclick", (e) => { if (e.target.closest(".gname")) startRename(g); });
   head.addEventListener("contextmenu", (e) => { e.preventDefault(); groupMenu(g, e.clientX, e.clientY); });
-  head.addEventListener("dragover", (e) => {
-    if (!dragTab) return;
-    e.preventDefault();
-    e.stopPropagation();
-    clearDropMarks();
-    head.classList.add("drop-into");
-  });
-  head.addEventListener("drop", (e) => {
-    if (!dragTab) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const d = dragTab;
-    endDrag();
-    moveTab(d, g.id, null);
-  });
-
   const list = document.createElement("div");
   list.className = "gtabs";
-  list.append(...members.map(tabEl));
-  list.addEventListener("dragover", (e) => {
-    if (!dragTab) return;
-    e.preventDefault();
-    e.stopPropagation();
-    clearDropMarks();
-    head.classList.add("drop-into");
-  });
-  list.addEventListener("drop", (e) => {
-    if (!dragTab) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const d = dragTab;
-    endDrag();
-    moveTab(d, g.id, null);
-  });
+  list.append(...members.map(tabEl), ...childGroups(g.id).map(groupEl));
+  // Tab oder Ordner auf Kopf bzw. Inhalt ablegen -> hinein
+  for (const zone of [head, list]) {
+    zone.addEventListener("dragover", (e) => {
+      if (!dragTab && !acceptsGroup()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearDropMarks();
+      head.classList.add("drop-into");
+    });
+    zone.addEventListener("drop", (e) => {
+      if (!dragTab && !acceptsGroup()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const t = dragTab, d = dragGroup;
+      endDrag();
+      if (t) moveTab(t, g.id, null);
+      else nestGroup(d, g.id);
+    });
+  }
   wrap.append(head, list);
   return wrap;
 }
 
 /* Drag & Drop innerhalb der Liste */
 let dragTab = null;
+let dragGroup = null;
 function clearDropMarks() {
   tabList.classList.remove("drop-out");
   for (const el of tabList.querySelectorAll(".drop-before, .drop-after, .drop-into")) {
@@ -549,23 +594,25 @@ function clearDropMarks() {
 }
 function endDrag() {
   dragTab = null;
+  dragGroup = null;
   clearDropMarks();
   for (const el of tabList.querySelectorAll(".dragging")) el.classList.remove("dragging");
 }
-// freie Fläche der Liste = aus Gruppe herausnehmen
+// freie Fläche der Liste = aus Gruppe herausnehmen (Tab) bzw. auf oberste Ebene (Ordner)
 tabList.addEventListener("dragover", (e) => {
-  if (!dragTab) return;
+  if (!dragTab && !dragGroup) return;
   e.preventDefault();
   clearDropMarks();
-  if (dragTab.group) tabList.classList.add("drop-out");
+  if ((dragTab && dragTab.group) || (dragGroup && dragGroup.parent)) tabList.classList.add("drop-out");
 });
 tabList.addEventListener("dragleave", (e) => { if (e.target === tabList) tabList.classList.remove("drop-out"); });
 tabList.addEventListener("drop", (e) => {
-  if (!dragTab) return;
+  if (!dragTab && !dragGroup) return;
   e.preventDefault();
-  const d = dragTab;
+  const t = dragTab, d = dragGroup;
   endDrag();
-  moveTab(d, null, null);
+  if (t) moveTab(t, null, null);
+  else nestGroup(d, null);
 });
 
 /* ================= Kontextmenü ================= */
@@ -600,7 +647,7 @@ function tabMenu(t, x, y) {
   const others = groups.filter((g) => g.id !== t.group);
   if (others.length) {
     items.push({ header: "In Gruppe verschieben" });
-    for (const g of others) items.push({ label: g.name, color: g.color, action: () => moveTab(t, g.id, null) });
+    for (const g of others) items.push({ label: groupPath(g), color: g.color, action: () => moveTab(t, g.id, null) });
   }
   items.push({ label: "Neue Gruppe mit diesem Tab", action: () => newGroup(t) });
   if (t.group) items.push({ label: "Aus Gruppe entfernen", action: () => moveTab(t, null, null) });
@@ -609,15 +656,18 @@ function tabMenu(t, x, y) {
 }
 
 function groupMenu(g, x, y) {
-  const members = tabs.filter((t) => t.group === g.id);
+  const members = tabsIn(g);
+  const parent = groupById(g.parent);
   openMenu(x, y, [
     { label: "Umbenennen", action: () => startRename(g) },
     { label: "PDF zur Gruppe hinzufügen …", action: () => send("open:" + g.id) },
+    { label: "Neuer Unterordner", action: () => newGroup(null, g) },
+    ...(parent ? [{ label: `Aus „${parent.name}“ herausnehmen`, action: () => nestGroup(g, parent.parent || null) }] : []),
     { label: "Farbe wechseln", color: COLORS[(COLORS.indexOf(g.color) + 1) % COLORS.length],
       action: () => { g.color = COLORS[(COLORS.indexOf(g.color) + 1) % COLORS.length]; renderTabs(); scheduleSave(); } },
     ...(members.length ? [{ label: "Alle als gelesen markieren", action: () => { for (const t of members) readSet.add(keyOf(t.path)); toggleRead(members[0], true); } }] : []),
     "-",
-    { label: "Gruppe auflösen (Tabs behalten)", action: () => deleteGroup(g, false) },
+    { label: parent ? `Gruppe auflösen (Inhalt nach „${parent.name}“)` : "Gruppe auflösen (Tabs behalten)", action: () => deleteGroup(g, false) },
     { label: "Gruppe mit allen Tabs schließen", danger: true, action: () => deleteGroup(g, true) },
   ]);
 }
@@ -821,12 +871,31 @@ function runTest(tab) {
   testCmd = "";
   if (cmd.startsWith("find:")) runTestFind(cmd.slice(5));
   else if (cmd.startsWith("ask:")) setTimeout(() => chat.ask(cmd.slice(4)), 2500);
+  else if (cmd === "groups") setTimeout(() => runTestGroups(tab), 1000);
   else if (cmd.startsWith("goto:")) {
     setTimeout(() => {
       tab.viewer.currentPageNumber = +cmd.slice(5);
       window.__log && window.__log("test: springe zu Seite " + tab.page);
     }, 1200);
   }
+}
+function runTestGroups(tab) {
+  const log = (m) => window.__log && window.__log(m);
+  const dump = () => [...tabList.querySelectorAll(".group")].map((el) => {
+    let d = 0; for (let p = el.parentElement; p && p !== tabList; p = p.parentElement) if (p.classList.contains("group")) d++;
+    return "  ".repeat(d) + el.querySelector(".gname").textContent + " " + el.querySelector(".gcount").textContent;
+  }).join(" | ");
+  const mk = (name, parent) => { const g = { id: "t" + name, name, collapsed: false, color: COLORS[0], parent }; groups.push(g); return g; };
+  const a = mk("Kurs", null), b = mk("Uebungen", null);
+  nestGroup(b, a.id);
+  moveTab(tab, b.id, null);
+  log("test groups verschachtelt: " + dump() + " | order=" + visualOrder().length);
+  nestGroup(a, b.id);
+  log("test groups zyklus abgelehnt: " + (a.parent === null) + " | " + dump());
+  saveSession();
+  log("test groups session: " + JSON.stringify(loadJSON("session", {}).groups.map((g) => [g.name, g.parent])));
+  deleteGroup(a, false);
+  log("test groups aufgelöst: " + dump() + " | parent Uebungen=" + b.parent + " | tab in " + tab.group);
 }
 function runTestFind(q) {
   const log = (m) => window.__log && window.__log(m);
@@ -921,7 +990,7 @@ function inBars(x, y) {
   return y <= toolbar.offsetHeight + 24 || (body.classList.contains("has-tabbar") && x <= off + tabbar.offsetWidth + 24);
 }
 function maybeHide() {
-  if (!tabs.length || resizing || renaming || dragTab || !menuEl.hidden) return;
+  if (!tabs.length || resizing || renaming || dragTab || dragGroup || !menuEl.hidden) return;
   if (document.activeElement === pageNum || document.activeElement === zoomVal) return; // wird gerade eingetippt
   if (inBars(lastX, lastY)) return;
   body.classList.remove("bars");
@@ -952,7 +1021,7 @@ document.addEventListener("drop", (e) => {
   if (!hasFiles(e) || !e.dataTransfer.files.length) return;
   e.preventDefault();
   const groupNode = e.target.closest && e.target.closest(".group");
-  const gid = groupNode ? groups[[...tabList.querySelectorAll(".group")].indexOf(groupNode)]?.id : "";
+  const gid = groupNode ? groupNode.dataset.gid : "";
   if (host && host.postMessageWithAdditionalObjects) host.postMessageWithAdditionalObjects("drop:" + (gid || ""), e.dataTransfer.files);
 }, true);
 

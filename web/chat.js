@@ -12,7 +12,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const baseName = (p) => String(p || "").split(/[\\/]/).pop();
 const dirOf = (p) => String(p || "").replace(/[\\/][^\\/]*$/, "");
 
+const SKILL_PROMPT = "Nutze den Skill vorlesung-erklaeren und erkläre mir diesen Foliensatz schrittweise.";
 const SUGGESTIONS = [
+  ["Vorlesung erklären", SKILL_PROMPT],
   ["Folie erklären", "Erkläre mir die aktuelle Folie verständlich – mit Intuition und, wo sinnvoll, einem Beispiel."],
   ["Zusammenfassung", "Fasse den Foliensatz kompakt zusammen: wichtigste Konzepte, Definitionen, Formeln und wie sie zusammenhängen."],
   ["Quiz mich", "Stell mir Verständnisfragen zum Stoff bis zur aktuellen Folie – eine Frage nach der anderen, warte jeweils auf meine Antwort."],
@@ -37,6 +39,7 @@ export function createChat(api) {
   const statusEl = $("chatStatus");
   const ctxEl = $("chatCtx");
   const selEl = $("chatSel");
+  const quickEl = $("chatQuick");
 
   const recs = new Map(); // Fingerprint -> Datensatz
   const runs = new Map(); // Request-ID -> laufende Claude-Anfrage
@@ -343,6 +346,22 @@ export function createChat(api) {
     sendBtn.classList.toggle("stop", running);
     input.disabled = !current;
     input.placeholder = current ? "Frag Claude zu diesem Foliensatz …" : "";
+
+    // Schnellbuttons: läuft der Skill "vorlesung-erklaeren" -> "Weiter", sonst Skill starten
+    const quick = [];
+    if (current && current.data.chat.messages.length && !running) {
+      if (current.data.chat.skill) quick.push(["Weiter", "weiter", "Nächste Foliengruppe erklären"]);
+      else quick.push(["Vorlesung erklären", SKILL_PROMPT, "Skill „vorlesung-erklaeren“: Überblick, dann Foliengruppe für Foliengruppe"]);
+    }
+    quickEl.replaceChildren(...quick.map(([label, prompt, title]) => {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.textContent = label;
+      b.title = title;
+      b.onclick = () => ask(prompt);
+      return b;
+    }));
+    quickEl.hidden = !quick.length;
   }
 
   function setStatus() {
@@ -416,7 +435,10 @@ export function createChat(api) {
     autosize();
     setOpen(true);
 
-    const job = { user, reply, history, dir: dirOf(tab.path), ctx: contextBlock(tab, page, pageText, sel) };
+    // "/skill-name …" als Kurzbefehl für Skills
+    const slash = text.match(/^\/([\w:.-]+)\s*([\s\S]*)$/);
+    const promptText = slash ? `Nutze den Skill „${slash[1]}“.` + (slash[2] ? " " + slash[2] : "") : text;
+    const job = { user, reply, history, promptText, dir: dirOf(tab.path), ctx: contextBlock(tab, page, pageText, sel) };
     startRun(rec, job, false, false);
     render();
     saveRec(rec);
@@ -453,7 +475,7 @@ export function createChat(api) {
     if (!sid) { sid = crypto.randomUUID(); chat.sessions[settings.device] = sid; }
     let prompt = job.ctx;
     if (mode === "new" && job.history.length) prompt += transcript(job.history);
-    prompt += "\n\n" + job.user.text;
+    prompt += "\n\n" + (job.promptText || job.user.text);
     const id = "r" + (++reqSeq) + "-" + Date.now().toString(36);
     const run = { id, rec, job, mode, retried, stderr: "", result: null, needSep: false, stopped: false };
     runs.set(id, run);
@@ -474,6 +496,7 @@ export function createChat(api) {
       case "WebFetch": try { return "Öffnet " + new URL(i.url).host; } catch { return "Öffnet Webseite"; }
       case "Grep": return "Durchsucht nach „" + (i.pattern || "") + "“";
       case "Glob": return "Sucht Dateien: " + (i.pattern || "");
+      case "Skill": return "Nutzt Skill: " + String(i.skill || i.name || "").replace(/^.*:/, "");
       default: return c.name;
     }
   }
@@ -495,7 +518,10 @@ export function createChat(api) {
       }
     } else if (ev.type === "assistant" && !ev.parent_tool_use_id) {
       for (const c of (ev.message && ev.message.content) || []) {
-        if (c.type === "tool_use") { m.tools.push(toolLabel(c)); touch(run.rec, m); }
+        if (c.type !== "tool_use") continue;
+        m.tools.push(toolLabel(c));
+        if (c.name === "Skill" && /vorlesung-erklaeren/.test(JSON.stringify(c.input || {}))) run.rec.data.chat.skill = "vorlesung-erklaeren";
+        touch(run.rec, m);
       }
     } else if (ev.type === "result") {
       run.result = ev;

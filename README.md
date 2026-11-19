@@ -11,6 +11,7 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 - Claude bekommt automatisch Dateiname, Pfad, aktuelle Seite und den Text dieser Seite mit
 - Markierter Text im PDF wird mitgeschickt. Rechtsklick auf eine Markierung bietet *Erklären*, *Beispiel*, *Übersetzen* und *Quizfrage* an
 - Claude kann die PDF selbst lesen (auch Diagramme und Formeln) und im Web recherchieren. Dateien ändern oder Befehle ausführen kann Claude nicht
+- Dein Skill **vorlesung-erklaeren** ist eingebunden: Button „Vorlesung erklären“, danach „Weiter“ für die nächste Foliengruppe. Andere eigene Claude-Skills startest du mit `/skill-name`
 - Formeln (LaTeX via KaTeX) und Markdown in den Antworten. Seitenverweise wie „S. 12“ sind anklickbar
 - Ein Chat pro PDF: Öffnest du eine PDF, zu der es schon einen Chat gibt, wird er automatisch geöffnet und fortgesetzt
 
@@ -21,7 +22,7 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 - Ist der Sync-Ordner nicht erreichbar, wird lokal gespeichert und später nachgetragen
 
 **Vom PDF-Viewer (SlimPDF)**
-- Randloses Fenster, Tabs und Tab-Gruppen, Sitzung wird wiederhergestellt
+- Randloses Fenster, Tabs und Tab-Gruppen (Ordner, per Ziehen auch als Unterordner verschachtelbar), Sitzung wird wiederhergestellt
 - Suche, Zoom, Einzelseiten-Modus, Vollbild, Drag & Drop, Gelesen-Markierung
 
 ## Voraussetzungen
@@ -33,7 +34,7 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 
 StudyBuddy startet für jede Nachricht `claude -p` (Claude Code im Print-Modus) mit Streaming-Ausgabe:
 
-- Erlaubte Tools: nur `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`. Alles andere wird automatisch abgelehnt
+- Erlaubte Tools: nur `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch` und `Skill` (deine Claude-Skills). Alles andere wird automatisch abgelehnt
 - Arbeitsverzeichnis: `%LOCALAPPDATA%\StudyBuddy\claude`. Die `CLAUDE.md` dort enthält die Tutor-Anweisungen. Der Ordner der PDF wird per `--add-dir` freigegeben
 - Pro PDF und Gerät gibt es eine Claude-Code-Session, die mit `--resume` fortgesetzt wird. Wurde der Chat auf einem anderen Gerät begonnen, startet eine neue Session und bekommt den bisherigen Verlauf als Kontext
 - Das Modell lässt sich im Chat-Menü wählen (Standard = Claude-Code-Voreinstellung)
@@ -61,6 +62,7 @@ Das Skript lädt beim ersten Lauf das WebView2 SDK (NuGet), PDF.js und KaTeX (np
 | `STUDYBUDDY_DEBUG=1` | DevTools aktivieren, Log nach `%LOCALAPPDATA%\StudyBuddy\debug.log` |
 | `STUDYBUDDY_PROFILE=name` | Getrenntes Profil/Instanz (eigene Einstellungen und Daten), z. B. zum Testen |
 | `STUDYBUDDY_TEST=ask:<Frage>` | nur mit Debug: stellt nach dem Öffnen automatisch eine Frage an Claude |
+| `STUDYBUDDY_TEST=groups` | nur mit Debug: Selbsttest für verschachtelte Ordner |
 
 ## Lizenz
 

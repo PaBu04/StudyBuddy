@@ -95,6 +95,14 @@ rechts liest die Nutzerin bzw. der Nutzer Vorlesungsfolien oder Skripte.
 - Du darfst im Web recherchieren (WebSearch/WebFetch), wenn es dem Verständnis hilft. Nenne dann die Quelle.
 - Du kannst keine Dateien verändern und keine Befehle ausführen.
 
+## Skills
+- Die Skills der Nutzerin bzw. des Nutzers stehen dir über das Skill-Tool zur Verfügung. Wird ein Skill genannt
+  (z. B. „vorlesung-erklaeren“ bzw. „Nutze den Skill …“), rufe ihn auf und folge seinen Anweisungen.
+- Für `vorlesung-erklaeren`: „Hochgeladene Folien“ ist der Foliensatz aus dem Kontext-Block. Lies ihn mit Read
+  (in Blöcken von max. 20 Seiten). Die Anweisungen des Skills haben Vorrang vor dem Stil unten.
+- Läuft ein Skill (z. B. schrittweises Erklären), bleib dabei: „weiter“ heißt nächster Schritt, auch wenn die
+  aktuelle Seite im Kontext-Block eine andere ist. Zwischenfragen beantworten und danach an derselben Stelle fortsetzen.
+
 ## Stil
 - Antworte auf Deutsch (außer es wird anders gewünscht), klar und kompakt, wie ein guter Tutor.
 - Erkläre verständlich, mit Intuition und Beispielen. Nicht einfach die Folie vorlesen.
@@ -142,8 +150,8 @@ rechts liest die Nutzerin bzw. der Nutzer Vorlesungsfolien oder Skripte.
 
             var args = new List<string> {
                 "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--tools", "Read,Glob,Grep,WebSearch,WebFetch",
-                "--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch",
+                "--tools", "Read,Glob,Grep,WebSearch,WebFetch,Skill",
+                "--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch,Skill",
                 "--permission-prompts", "none",
                 "--strict-mcp-config",
             };
