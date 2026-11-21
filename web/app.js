@@ -64,8 +64,183 @@ function flushPositions() {
     keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 500).forEach((k) => delete all[k]);
   }
   store.set("positions", JSON.stringify(all));
+  scheduleSync();
 }
 window.addEventListener("pagehide", flushPositions);
+
+/* ================= Gelesen-Status ================= */
+// readT: Pfad (klein) -> { v, t } – mit Zeitstempel, damit auch "ungelesen" zwischen Geräten synchronisiert wird
+function setRead(k, v, t = Date.now(), fromSync = false) {
+  if (v) readSet.add(k); else readSet.delete(k);
+  const rt = loadJSON("readT", {});
+  rt[k] = { v: !!v, t };
+  store.set("readT", JSON.stringify(rt));
+  store.set("read", JSON.stringify([...readSet]));
+  if (!fromSync) scheduleSync();
+}
+
+/* ================= Einstellungen mit Zeitstempel (synchronisiert) ================= */
+function setPref(k, v, fromSync = false, t = Date.now()) {
+  store.set(k, v);
+  const pt = loadJSON("prefsT", {});
+  pt[k] = t;
+  store.set("prefsT", JSON.stringify(pt));
+  if (!fromSync) scheduleSync();
+}
+
+/* ================= Geräte-Sync des App-Zustands ================= */
+// Datei state.json im Sync-Ordner: Sitzung (offene Tabs, Ordner, aktiver Tab), Lesepositionen,
+// Gelesen-Status und Einstellungen. Ablauf immer: lesen -> zusammenführen/übernehmen -> schreiben.
+//  - Sitzung: neueste gewinnt (das zuletzt benutzte Gerät)
+//  - Lesepositionen, Gelesen, Einstellungen: pro Eintrag der neueste
+// Bildschirmabhängiges (Tab-/Chatbreite, Chat offen) bleibt pro Gerät.
+const SYNC_PREFS = ["single", "scale"];
+let syncDir = "";
+let applyingT = 0;
+let syncTimer = 0;
+let syncing = false;
+let syncAgain = false;
+let lastPushed = "";
+let stateWaiter = null;
+
+function scheduleSync(ms = 3000) {
+  if (!primary || !sessionReady || !syncDir) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncNow, ms);
+}
+
+function fetchState(timeout = 5000) {
+  return new Promise((res) => {
+    const timer = setTimeout(() => { stateWaiter = null; res(undefined); }, timeout);
+    stateWaiter = (json) => { clearTimeout(timer); stateWaiter = null; res(json); };
+    send("stateget");
+  });
+}
+
+function buildState() {
+  const rt = loadJSON("readT", {});
+  const read = {};
+  for (const k in rt) read[k] = rt[k];
+  for (const k of readSet) if (!read[k]) read[k] = { v: true, t: 0 }; // alte Einträge ohne Zeitstempel
+  const pt = loadJSON("prefsT", {});
+  const prefs = {};
+  for (const k of SYNC_PREFS) { const v = store.get(k, null); if (v !== null) prefs[k] = { v, t: pt[k] || 0 }; }
+  return { v: 1, session: loadJSON("session", null), positions: loadJSON("positions", {}), read, prefs };
+}
+
+// Fremden Zustand einmischen. Gibt zurück, was sich geändert hat.
+function mergeState(r) {
+  const out = { pos: [], read: false, prefs: [], session: null };
+  if (!r || typeof r !== "object") return out;
+  const pos = loadJSON("positions", {});
+  for (const k in r.positions || {}) {
+    const e = r.positions[k];
+    if (e && e.loc && (!pos[k] || (e.t || 0) > (pos[k].t || 0))) { pos[k] = e; out.pos.push(k); }
+  }
+  if (out.pos.length) store.set("positions", JSON.stringify(pos));
+
+  const rt = loadJSON("readT", {});
+  for (const k in r.read || {}) {
+    const e = r.read[k];
+    const mine = rt[k] || (readSet.has(k) ? { v: true, t: 0 } : null);
+    if (!e || (mine && (e.t || 0) <= (mine.t || 0))) continue;
+    if (!mine || mine.v !== !!e.v) out.read = true;
+    setRead(k, !!e.v, e.t || 0, true);
+  }
+
+  const pt = loadJSON("prefsT", {});
+  for (const k of SYNC_PREFS) {
+    const e = r.prefs && r.prefs[k];
+    if (e && (e.t || 0) > (pt[k] || 0) && store.get(k, null) !== e.v) { setPref(k, e.v, true, e.t); out.prefs.push(k); }
+  }
+
+  const ls = loadJSON("session", null);
+  if (r.session && Array.isArray(r.session.tabs) && (!ls || (r.session.t || 0) > (ls.t || 0))) {
+    store.set("session", JSON.stringify(r.session));
+    out.session = r.session;
+  }
+  return out;
+}
+
+// Änderungen eines anderen Geräts im laufenden Fenster übernehmen
+function applyLive(ch) {
+  if (ch.session) applySessionLive(ch.session);
+  for (const t of tabs) {
+    if (!ch.pos.includes(keyOf(t.path))) continue;
+    const p = savedPos(t.path);
+    if (!p || !p.loc) continue;
+    const near = t.loc && t.loc.pageNumber === p.loc.pageNumber && Math.abs((t.loc.top || 0) - (p.loc.top || 0)) < 8;
+    if (t.ready && t.viewer) {
+      if (near) continue;
+      t.syncHold = Date.now() + 1500;
+      t.viewer.scrollPageIntoView({ pageNumber: Math.min(p.loc.pageNumber || 1, t.viewer.pagesCount),
+        destArray: [null, { name: "XYZ" }, p.loc.left, p.loc.top, null], allowNegativeOffset: true });
+    } else if (!t.doc) t.want = { loc: p.loc, scale: p.scale };
+  }
+  if (ch.prefs.includes("single") && (store.get("single", "0") === "1") !== singleMode) setSingleMode(!singleMode, true);
+  if (ch.read || ch.session) renderTabs();
+}
+
+// Tabs/Ordner auf den Stand des anderen Geräts bringen; schon geöffnete PDFs werden weiterverwendet
+function applySessionLive(s) {
+  applyingT = s.t || Date.now();
+  try {
+    groups.splice(0, groups.length, ...(s.groups || []).map((g) =>
+      ({ id: g.id, name: g.name, collapsed: !!g.collapsed, color: g.color || COLORS[0], parent: g.parent || null })));
+    fixParents();
+    const old = new Map(tabs.map((t) => [keyOf(t.path), t]));
+    const next = [];
+    for (const e of s.tabs || []) {
+      if (!e.path || next.some((t) => keyOf(t.path) === keyOf(e.path))) continue;
+      const group = groupById(e.group) ? e.group : null;
+      let t = old.get(keyOf(e.path));
+      if (t) { old.delete(keyOf(e.path)); t.group = group; }
+      else {
+        const pos = savedPos(e.path);
+        t = addTab({ name: e.name, path: e.path, group, want: pos ? { loc: pos.loc, scale: pos.scale } : { loc: e.loc, scale: e.scale } });
+        tabs.pop(); // addTab hängt an; Reihenfolge setzen wir unten
+        t.fresh = true;
+      }
+      next.push(t);
+    }
+    for (const t of old.values()) disposeTab(t);
+    tabs.splice(0, tabs.length, ...next);
+    const a = tabs[s.active] || tabs[0] || null;
+    activate(a);
+    for (const t of tabs) if (t.fresh) { t.fresh = false; if (t !== a) send("probe:" + t.path); }
+    if (!tabs.length) body.classList.remove("bars");
+    saveSession();
+    if (window.__log) window.__log("sync: Sitzung übernommen: " + tabs.map((t) => t.name).join(", ") + " | aktiv: " + (a ? a.name : "-"));
+  } finally {
+    applyingT = 0;
+  }
+}
+
+async function syncNow() {
+  if (!primary || !syncDir) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
+  clearTimeout(syncTimer);
+  try {
+    if (sessionReady) { clearTimeout(saveTimer); saveSession(); }
+    const json = await fetchState();
+    if (json === undefined) return; // Sync-Ordner antwortet nicht -> später erneut
+    let remote = null;
+    try { remote = json ? JSON.parse(json) : null; } catch { remote = null; }
+    if (remote) applyLive(mergeState(remote));
+    const state = buildState();
+    const body = JSON.stringify(state);
+    if (body !== lastPushed) {
+      lastPushed = body;
+      send("stateput:" + JSON.stringify({ ...state, t: Date.now() }));
+    }
+  } finally {
+    syncing = false;
+    if (syncAgain) { syncAgain = false; scheduleSync(500); }
+  }
+}
+window.addEventListener("focus", () => scheduleSync(200));
+setInterval(() => scheduleSync(0), 60000);
 
 /* ================= Sitzung ================= */
 let saveTimer = 0;
@@ -86,7 +261,12 @@ function saveSession() {
     })),
     active: tabs.indexOf(active),
   };
+  // Zeitstempel nur bei echter Änderung erhöhen (wichtig für den Geräte-Sync: neueste Sitzung gewinnt)
+  const prev = loadJSON("session", null);
+  const same = prev && JSON.stringify({ ...prev, t: 0 }) === JSON.stringify({ ...data, t: 0 });
+  data.t = applyingT || (same ? prev.t || Date.now() : Date.now());
   store.set("session", JSON.stringify(data));
+  if (!same) scheduleSync();
 }
 function restoreSession() {
   const s = loadJSON("session", null);
@@ -164,6 +344,7 @@ function ensureViewer(tab) {
       });
     }
     tab.ready = true;
+    if (w && w.loc) tab.syncHold = Date.now() + 1500;
     setTimeout(() => window.__log && window.__log(`geöffnet: ${tab.name} auf Seite ${tab.page}`), 800);
     if (tab === active && testCmd) runTest(tab);
     if (tab === active) {
@@ -179,13 +360,15 @@ function ensureViewer(tab) {
   eventBus.on("scalechanging", (e) => {
     tab.scale = e.scale;
     tab.mode = isPreset(e.presetValue) ? e.presetValue : "";
-    if (!singleMode) store.set("scale", tab.mode || String(e.scale));
+    if (!singleMode && store.get("scale", "") !== (tab.mode || String(e.scale))) setPref("scale", tab.mode || String(e.scale));
     if (tab === active) updateBar();
   });
   eventBus.on("updateviewarea", (e) => {
     const l = e.location;
     if (!l) return;
     tab.loc = { pageNumber: l.pageNumber, left: l.left, top: l.top };
+    // direkt nach dem Wiederherstellen/Übernehmen einer Position kein neuer Zeitstempel (sonst Sync-Echo)
+    if (Date.now() < (tab.syncHold || 0)) return;
     rememberPos(tab);
     scheduleSave();
     chat.progress(tab);
@@ -254,7 +437,9 @@ async function loadInto(tab, url) {
 }
 
 // Antwort des Hosts: Datei ist bereit unter url
+const earlyLoads = []; // Dateien, die eintreffen, bevor die Sitzung wiederhergestellt ist (Start wartet auf Sync)
 function onHostLoad(url, name, path, tag) {
+  if (primary && !sessionReady) { earlyLoads.push([url, name, path, tag]); return; }
   let tab = tabs.find((t) => keyOf(t.path) === keyOf(path));
   if (tab) {
     if (tab.offline) setOffline(tab, false);
@@ -291,14 +476,19 @@ function activate(tab) {
   chat.activeChanged(tab);
 }
 
-function closeTab(tab) {
-  const i = tabs.indexOf(tab);
-  if (i < 0) return;
-  tabs.splice(i, 1);
+// Viewer/Dokument eines Tabs freigeben (ohne Tab-Liste/Aktivierung anzufassen)
+function disposeTab(tab) {
   if (tab.loc && tab.ready) { rememberPos(tab); flushPositions(); }
   try { if (tab.viewer) { tab.viewer.setDocument(null); tab.linkService.setDocument(null); } } catch { /* egal */ }
   if (tab.task) tab.task.destroy().catch(() => {});
   if (tab.container) tab.container.remove();
+}
+
+function closeTab(tab) {
+  const i = tabs.indexOf(tab);
+  if (i < 0) return;
+  tabs.splice(i, 1);
+  disposeTab(tab);
   if (active === tab) {
     // bevorzugt Nachbar in derselben Gruppe
     const order = visualOrder();
@@ -345,8 +535,7 @@ function cycleTab(dir) {
 function toggleRead(tab, value) {
   const k = keyOf(tab.path);
   const v = value ?? !readSet.has(k);
-  if (v) readSet.add(k); else readSet.delete(k);
-  store.set("read", JSON.stringify([...readSet]));
+  setRead(k, v);
   renderTabs();
   chat.readChanged(tab, v);
 }
@@ -665,7 +854,7 @@ function groupMenu(g, x, y) {
     ...(parent ? [{ label: `Aus „${parent.name}“ herausnehmen`, action: () => nestGroup(g, parent.parent || null) }] : []),
     { label: "Farbe wechseln", color: COLORS[(COLORS.indexOf(g.color) + 1) % COLORS.length],
       action: () => { g.color = COLORS[(COLORS.indexOf(g.color) + 1) % COLORS.length]; renderTabs(); scheduleSave(); } },
-    ...(members.length ? [{ label: "Alle als gelesen markieren", action: () => { for (const t of members) readSet.add(keyOf(t.path)); toggleRead(members[0], true); } }] : []),
+    ...(members.length ? [{ label: "Alle als gelesen markieren", action: () => { for (const t of members) { setRead(keyOf(t.path), true); chat.readChanged(t, true); } renderTabs(); } }] : []),
     "-",
     { label: parent ? `Gruppe auflösen (Inhalt nach „${parent.name}“)` : "Gruppe auflösen (Tabs behalten)", action: () => deleteGroup(g, false) },
     { label: "Gruppe mit allen Tabs schließen", danger: true, action: () => deleteGroup(g, true) },
@@ -743,9 +932,7 @@ function applyProgress(tab, p) {
     }
   }
   if (typeof p.read === "boolean" && p.read !== isRead(tab)) {
-    const k = keyOf(tab.path);
-    if (p.read) readSet.add(k); else readSet.delete(k);
-    store.set("read", JSON.stringify([...readSet]));
+    setRead(keyOf(tab.path), p.read, p.readT || Date.now());
     renderTabs();
   }
 }
@@ -913,9 +1100,9 @@ function runTestFind(q) {
 let singleMode = store.get("single", "0") === "1";
 const singleBtn = $("single");
 
-function setSingleMode(on) {
+function setSingleMode(on, fromSync = false) {
   singleMode = on;
-  store.set("single", on ? "1" : "0");
+  if (!fromSync) setPref("single", on ? "1" : "0");
   singleBtn.classList.toggle("active", on);
   body.classList.toggle("single", on);
   singleBtn.title = on ? "Einzelseiten-Modus beenden (S)" : "Einzelseiten-Modus (S)";
@@ -1084,18 +1271,46 @@ function showMessage(text) {
   msgTimer = setTimeout(() => (messageEl.hidden = true), 6000);
 }
 
+/* ================= Start (Hauptfenster) ================= */
+// Erst Einstellungen holen; ist ein Sync-Ordner gesetzt, den Zustand der anderen Geräte einmischen,
+// dann die Sitzung wiederherstellen.
+let settingsWaiter = null;
+async function startPrimary() {
+  await new Promise((res) => {
+    const timer = setTimeout(() => { settingsWaiter = null; res(); }, 2500);
+    settingsWaiter = () => { clearTimeout(timer); settingsWaiter = null; res(); };
+    send("settings");
+  });
+  if (syncDir) {
+    const json = await fetchState(4000);
+    try { if (json) mergeState(JSON.parse(json)); } catch { /* kaputte Datei ignorieren */ }
+    singleMode = store.get("single", "0") === "1";
+    singleBtn.classList.toggle("active", singleMode);
+    body.classList.toggle("single", singleMode);
+  }
+  restoreSession();
+  for (const args of earlyLoads.splice(0)) onHostLoad(...args);
+  scheduleSync(1500);
+}
+
 /* ================= Host-Nachrichten ================= */
 if (host) {
   host.addEventListener("message", (e) => {
     const [cmd, a, b, c, d] = String(e.data).split("\n");
-    if (window.__log) window.__log("host: " + cmd + " " + (a || ""));
+    if (window.__log && cmd !== "cc") window.__log("host: " + cmd + " " + (a || "").slice(0, 120));
+    if (cmd === "settings") {
+      const had = syncDir;
+      syncDir = a || "";
+      if (settingsWaiter) settingsWaiter();
+      else if (syncDir && syncDir !== had) scheduleSync(500); // Sync gerade eingerichtet
+    }
+    if (cmd === "appstate") { if (stateWaiter) stateWaiter(String(e.data).slice(9)); return; }
     if (chat.onHost(cmd, String(e.data))) return;
     if (cmd === "init") {
       primary = a === "primary";
       testCmd = b || "";
-      send("settings");
-      if (primary) restoreSession();
-      else { sessionReady = true; renderTabs(); }
+      if (primary) startPrimary();
+      else { send("settings"); sessionReady = true; renderTabs(); }
     } else if (cmd === "load") onHostLoad(a, b, c, d);
     else if (cmd === "missing" || cmd === "online") {
       const t = tabs.find((t) => keyOf(t.path) === keyOf(a));

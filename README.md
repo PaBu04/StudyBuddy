@@ -17,7 +17,8 @@ PDF-Viewer zum Lernen mit **Claude als Lernbegleiter**. Links ist ein Claude-Cha
 
 **Synchronisation zwischen Geräten**
 - Im Chat-Menü (`⋯`) einen **Sync-Ordner** wählen, z. B. auf einem Netzlaufwerk oder in OneDrive/Nextcloud. Auf allen Geräten denselben Ordner wählen
-- Synchronisiert werden Chatverlauf, Leseposition und Gelesen-Status
+- Synchronisiert werden Chatverlauf, **offene Tabs und Ordner** (inkl. aktivem Tab), Lesepositionen, Gelesen-Status sowie Zoom und Einzelseiten-Modus. Voraussetzung für die Tabs: Die PDFs liegen auf allen Geräten unter demselben Pfad (z. B. Netzlaufwerk mit gleichem Laufwerksbuchstaben)
+- Abgleich beim Start, beim Fokussieren des Fensters, alle 60 s und kurz nach jeder Änderung. Die Sitzung des zuletzt benutzten Geräts gewinnt; Lesepositionen und Gelesen-Status werden pro PDF nach Zeitstempel zusammengeführt. Tab-/Chatbreite bleiben pro Gerät
 - PDFs werden am Inhalt (PDF-Fingerprint) erkannt, nicht am Pfad. Die Datei darf auf jedem Gerät woanders liegen
 - Ist der Sync-Ordner nicht erreichbar, wird lokal gespeichert und später nachgetragen
 
@@ -47,6 +48,7 @@ StudyBuddy startet für jede Nachricht `claude -p` (Claude Code im Print-Modus) 
 | `%LOCALAPPDATA%\StudyBuddy\settings.ini` | Sync-Ordner, Modell, Geräte-ID, optional `claudePath` |
 | `%LOCALAPPDATA%\StudyBuddy\docs\` | lokale Kopie aller Datensätze (eine JSON-Datei pro PDF) |
 | `<Sync-Ordner>\docs\` | synchronisierte Datensätze |
+| `<Sync-Ordner>\state.json` | synchronisierter App-Zustand (Tabs, Ordner, Lesepositionen, Gelesen, Einstellungen) |
 
 ## Selbst bauen
 

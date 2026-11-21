@@ -229,6 +229,50 @@ namespace StudyBuddy
             });
         }
 
+        // ---------- Gerätübergreifender App-Zustand (offene Tabs, Ordner, Lesepositionen, Gelesen, Einstellungen) ----------
+        // Eine Datei <Sync-Ordner>\state.json. Zusammengeführt wird auf der Seite (lesen -> mergen -> schreiben).
+
+        // stateget -> appstate\n<json oder leer>   ("state" ist schon der Fensterzustand)
+        void StateGet()
+        {
+            string sync = SyncDir;
+            if (sync.Length == 0) { Post("appstate\n"); return; }
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string json = "";
+                try
+                {
+                    if (!SafeDirExists(sync)) UiPost("syncoffline\n" + sync);
+                    else
+                    {
+                        string f = Path.Combine(sync, "state.json");
+                        if (File.Exists(f)) json = ReadShared(f);
+                    }
+                }
+                catch (Exception ex) { UiPost("log:stateget " + ex.Message); }
+                UiPost("appstate\n" + json.Replace("\r", "").Replace("\n", " "));
+            });
+        }
+
+        // stateput:<json>
+        void StatePut(string json)
+        {
+            string sync = SyncDir;
+            if (sync.Length == 0 || json.Length == 0) return;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                lock (fileLock)
+                {
+                    try
+                    {
+                        if (!SafeDirExists(sync)) { UiPost("syncoffline\n" + sync); return; }
+                        WriteAtomic(Path.Combine(sync, "state.json"), json);
+                    }
+                    catch (Exception ex) { UiPost("syncoffline\n" + sync + "\n" + ex.Message); }
+                }
+            });
+        }
+
         static void WriteAtomic(string path, string text)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
